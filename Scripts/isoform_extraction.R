@@ -31,9 +31,9 @@ BRCA_match <- merge(BRCA_match, dplyr::filter(IDs, V2 %in% BRCA_match$Cancer_Iso
   dplyr::rename(Cancer_ENST = V1)                    
 
 BRCA_match[!complete.cases(BRCA_match),]
-#Need to go back to try and match these missing ones, Sergio may be able to help
+#Need to go back to try and match these missing ones
 
-
+#Complete data
 BRCA_match_cc <- na.omit(BRCA_match)
 
 #Read in BRCA Survival data
@@ -43,17 +43,20 @@ BRCA_surv <- XenaGenerate() %>%
   XenaDownload() %>%
   XenaPrepare()
 
-##Read in tpsm data
+##Read in tpsm and iso% data
 load("/scratch/kvdd952/isoform_data/iso_ALL.RData")
+load("/scratch/kvdd952/isoform_data/iso_pct_BRCA.RData") # issues reading whole thing in, this is restricted to BRCA survival data patients
 #Subset to only BRCA survival data
 sample <- BRCA_surv$sample %>% append("sample")
 iso_BRCA <- iso_ALL[, colnames(iso_ALL) %in% sample]
 #Remove after . so have the only unique identifier
 iso_BRCA$sample <- gsub("\\..*","", iso_BRCA$sample)
+iso_pct$sample <- gsub("\\..*","", iso_pct$sample)
+iso_pct <- iso_pct %>% relocate(sample)
 
 #Filter to the specific isoform expression we want
-Normal <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Normal_ENST) %>% t() %>% janitor::row_to_names(1) 
-Cancer <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Cancer_ENST) %>% t() %>% janitor::row_to_names(1) 
+Normal_TPM <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Normal_ENST) %>% t() %>% janitor::row_to_names(1) 
+Cancer_TPM <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Cancer_ENST) %>% t() %>% janitor::row_to_names(1) 
 
 #CHECK FOR MISSING!
 ## Write function to identify mismatch
@@ -64,16 +67,26 @@ Cancer <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Cancer_ENST) %>% t()
 #Remove missing
 BRCA_match_cc <- filter(BRCA_match_cc, Normal_ENST != "ENST00000644486")
 #Repeat with cc
-Normal <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Normal_ENST) %>% t() %>% janitor::row_to_names(1) 
-Cancer <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Cancer_ENST) %>% t() %>% janitor::row_to_names(1) 
+Normal_TPM <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Normal_ENST) %>% t() %>% janitor::row_to_names(1) 
+Cancer_TPM <- dplyr::filter(iso_BRCA, sample %in% BRCA_match_cc$Cancer_ENST) %>% t() %>% janitor::row_to_names(1) 
 
 #Change our expression matrices to numeric
-class(Normal) <- "numeric"
-class(Cancer) <- "numeric"
+class(Normal_TPM) <- "numeric"
+class(Cancer_TPM) <- "numeric"
 
 #Match
-Cancer <- Cancer[,match(BRCA_match_cc$Cancer_ENST, colnames(Cancer))]
-Normal <- Normal[,match(BRCA_match_cc$Normal_ENST, colnames(Normal))]
+Cancer_TPM <- Cancer_TPM[,match(BRCA_match_cc$Cancer_ENST, colnames(Cancer_TPM))]
+Normal_TPM <- Normal_TPM[,match(BRCA_match_cc$Normal_ENST, colnames(Normal_TPM))]
+
+#Repat with iso%
+Normal_pct <- dplyr::filter(iso_pct, sample %in% BRCA_match_cc$Normal_ENST) %>% t() %>% janitor::row_to_names(1) 
+Cancer_pct <- dplyr::filter(iso_pct, sample %in% BRCA_match_cc$Cancer_ENST) %>% t() %>% janitor::row_to_names(1)
+
+class(Normal_pct) <- "numeric"
+class(Cancer_pct) <- "numeric"
+
+Cancer_pct <- Cancer_pct[,match(BRCA_match_cc$Cancer_ENST, colnames(Cancer_pct))]
+Normal_pct <- Normal_pct[,match(BRCA_match_cc$Normal_ENST, colnames(Normal_pct))]
 
 #Save clean
-save(BRCA_match, BRCA_match_cc, Cancer, Normal, file="Results/isoexp_clean")
+save(BRCA_match, BRCA_match_cc, Cancer_TPM, Normal_TPM, Cancer_pct, Normal_pct, file="Results/isoexp_clean.RData")
