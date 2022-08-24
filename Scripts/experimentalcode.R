@@ -11,13 +11,17 @@ iso_ALL <- XenaGenerate() %>%
    XenaDownload() %>%
    XenaPrepare()
 
-iso_ALL <- XenaGenerate() %>% 
+iso_pct <- XenaGenerate() %>% 
   XenaFilter(filterDatasets = "TcgaTargetGtex_rsem_isopct") %>%
   XenaQuery() %>%
-  XenaDownload() %>%
-  XenaPrepare()
+  XenaDownload()
+  
 
-iso_ALL <- read.csv(file="/scratch/kvdd952/isoform_data/TcgaTargetGtex_rsem_isopct", sep="\t")
+l <- BRCA_surv[["sample"]]
+l <- append(l, "sample")
+iso_pct <- data.table::fread( file="/scratch/kvdd952/isoform_data/TcgaTargetGtex_rsem_isopct", sep = "\t", select=l)
+
+save(iso_pct, file="/scratch/kvdd952/isoform_data/iso_pct_BRCA.RData")
 
 #"TcgaTargetGtex_rsem_isopct"
 
