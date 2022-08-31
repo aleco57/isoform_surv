@@ -14,9 +14,9 @@ library(corrr)
 load("~/splicing/Results/isoexp_clean.RData")
 
 #Check everything matches
-identical(colnames(Normal_pct),BRCA_match_cc$Normal_ENST)
-identical(colnames(Cancer_pct),BRCA_match_cc$Cancer_ENST)
-identical(row.names(Cancer_pct), row.names(Normal_pct))
+identical(colnames(Normal_pct),BRCA_match_cc$Normal_ENST) %>% stopifnot()
+identical(colnames(Cancer_pct),BRCA_match_cc$Cancer_ENST) %>% stopifnot()
+identical(row.names(Cancer_pct), row.names(Normal_pct)) %>% stopifnot()
 
 #tpm difference
 pct_diff <- as.data.frame(Cancer_pct) - as.data.frame(Normal_pct)
@@ -34,12 +34,18 @@ BRCA_phen <- XenaGenerate() %>%
   XenaDownload() %>%
   XenaPrepare()
 
+surv_data <- merge(Cancer_pct, BRCA_surv[,c(1,3,4)], by.x=0, by.y="sample") %>% column_to_rownames(var="Row.names") %>% relocate(OS,OS.time)
+surv_data[is.na(surv_data$OS.time),]
+missing <- dplyr::filter(BRCA_surv, !sample %in% row.names(surv_data))
+
 #Filter to only patients available
 BRCA_phen <- dplyr::filter(BRCA_phen, sampleID %in% row.names(pct_diff)) %>% column_to_rownames(var="sampleID")
 BRCA_surv <- dplyr::filter(BRCA_surv, sample %in% row.names(pct_diff)) %>% column_to_rownames(var="sample")
 
-BRCA_phen2 <- BRCA_phen[,c("age_at_initial_pathologic_diagnosis", 
-                           "histological_type",                         
+BRCA_phen2 <- BRCA_phen[,c("sampleID",
+  "age_at_initial_pathologic_diagnosis", 
+                           "histological_type", 
+                           "gender",
                            "pathologic_stage",                         # Stage
                            "tissue_source_site",                       # Clinical site where material taken
                            "sample_type",                              # type of biological material taken 
@@ -57,6 +63,8 @@ BRCA_phen2 <- mutate(BRCA_phen2, stage = case_when(
   pathologic_stage == "Stage X" ~ 5)) 
 BRCA_phen2$stage <- as.factor(BRCA_phen2$stage)
 ```
+
+## EDA of phenotyps and isoform expression
 
 ```{r, EDA}
 dlookr::diagnose(BRCA_phen2)
@@ -84,5 +92,14 @@ variances<-apply(Cancer_pct, 2, var)
 variances[which(variances<=1)]
 ```
 
+## Comparing survival data missingess
+
+```{r, survival data missingness}
+nrow(missing)
+hist(surv_data$OS.time)
+hist(missing$OS.time)
+tabyl(surv_data$OS)
+tabyl(missing$OS)
+```
 
 
