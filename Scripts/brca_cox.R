@@ -8,26 +8,27 @@ library(dplyr)
 library(caret)
 library(SHAPforxgboost)
 
-load("Results/ciso_pheno_surv.RData")
-BRCA_surv$gender <- ifelse(BRCA_surv$gender=="FEMALE", 0, 1)
-BRCA_surv$stage <- as.numeric(BRCA_surv$stage)
-BRCA_surv <- BRCA_surv[!is.na(BRCA_surv$OS.time),]
+load("Results/clean_data_all.RData")
+
+#Remove variables if only have isoform OR gene expression
+missS <- filter(BRCA_match_cc, !(CancerIso %in% iso))[["SYMBOL"]]
+missI <- filter(BRCA_match_cc, !(SYMBOL %in% gene))[["CancerIso"]]
 
 #Linear model
-res.cox <- coxph(Surv(OS.time, OS) ~ ., data = BRCA_surv[,c(1:3, 9:83)])
+res.cox <- coxph(Surv(OS.time, OS) ~ ., data = clean_data_all)
 summary(res.cox) 
 
 #xgboost
-trainIndex <- createDataPartition(BRCA_surv$OS, 
+trainIndex <- createDataPartition(clean_data_all$OS, 
                                   list=F,
                                   p=.8)
-train <- BRCA_surv[ trainIndex,]
-test  <- BRCA_surv[-trainIndex,]
+train <- clean_data_all[ trainIndex,]
+test  <- clean_data_all[-trainIndex,]
 
 label.train <- ifelse(train$OS == 1, train$OS.time, -train$OS.time)
 label.test <- ifelse(test$OS == 1, test$OS.time, -test$OS.time)
-Dmat.train <- train[,c(1:2,8, 11:83)] %>% as.matrix() %>% xgb.DMatrix(label = label.train)
-Dmat.test <- test[,c(1:2,8, 11:83)] %>% as.matrix() %>% xgb.DMatrix(label = label.test)
+
+Dmat.test <- test %>% as.matrix() %>% xgb.DMatrix(label = label.test)
 
 
 #First build a model with default parametes
