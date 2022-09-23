@@ -1,0 +1,106 @@
+---
+title: "EDA_BRCA"
+output: html_document
+---
+```{r, data loading and cleaning, error=FALSE, results=F, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(UCSCXenaTools)
+library(janitor)
+library(dlookr)
+library(SmartEDA)
+library(corrr)
+
+load("~/splicing/Results/isoexp_clean.RData")
+
+#Check everything matches
+#identical(colnames(Normal_pct),BRCA_match_cc$Normal_ENST) %>% stopifnot()
+identical(colnames(Cancer_pct),BRCA_match_cc$Cancer_ENST) %>% stopifnot()
+#identical(row.names(Cancer_pct), row.names(Normal_pct)) %>% stopifnot()
+
+#tpm difference
+#pct_diff <- as.data.frame(Cancer_pct) - as.data.frame(Normal_pct)
+
+#Read in Phenotype and Survival Data
+BRCA_surv <- XenaGenerate() %>% 
+  XenaFilter(filterDatasets = "survival/BRCA_survival.txt") %>% 
+  XenaQuery() %>%
+  XenaDownload() %>%
+  XenaPrepare()
+
+BRCA_phen <- XenaGenerate() %>% 
+  XenaFilter(filterDatasets = "TCGA.BRCA.sampleMap/BRCA_clinicalMatrix") %>% 
+  XenaQuery() %>%
+  XenaDownload() %>%
+  XenaPrepare()
+
+surv_data <- merge(Cancer_pct, BRCA_surv[,c(1,3,4)], by.x=0, by.y="sample") %>% column_to_rownames(var="Row.names") %>% relocate(OS,OS.time)
+surv_data[is.na(surv_data$OS.time),]
+missing <- dplyr::filter(BRCA_surv, !sample %in% row.names(surv_data))
+missing <- missing[endsWith(missing$sample, '-01'),]
+
+#Filter to only patients available
+BRCA_phen <- dplyr::filter(BRCA_phen, sampleID %in% row.names(Cancer_pct)) %>% column_to_rownames(var="sampleID")
+BRCA_surv <- dplyr::filter(BRCA_surv, sample %in% row.names(Cancer_pct)) %>% column_to_rownames(var="sample")
+
+BRCA_phen2 <- BRCA_phen[,c("age_at_initial_pathologic_diagnosis", 
+                           "histological_type", 
+                           "gender",
+                           "pathologic_stage",                         # Stage
+                           "tissue_source_site",                       # Clinical site where material taken
+                           "sample_type",                              # type of biological material taken 
+                           "days_to_collection",                       # Days till sample collection from initial pathological diagnosis (if - then retrospective data)
+                           "days_to_birth"                             # Time interval from person's DOB to initial pathological diagnosis, negative number of days
+                           )]
+
+
+#Mutate and split stage into five categories
+BRCA_phen2 <- mutate(BRCA_phen2, stage = case_when(
+  pathologic_stage == "Stage I" | pathologic_stage == "Stage IA" | pathologic_stage == "Stage IB" ~ 1,
+  pathologic_stage == "Stage II" | pathologic_stage == "Stage IIA" | pathologic_stage == "Stage IIB" ~ 2,
+  pathologic_stage == "Stage III" | pathologic_stage == "Stage IIIA" | pathologic_stage == "Stage IIIB" | pathologic_stage == "Stage IIIC" ~ 3,
+  pathologic_stage == "Stage IV" ~ 4,
+  pathologic_stage == "Stage X" ~ 5)) 
+BRCA_phen2$stage <- as.factor(BRCA_phen2$stage)
+BRCA_phen2$gender <- ifelse(BRCA_phen2$gender=="FEMALE", 0, 1)
+```
+
+## EDA of phenotypes and isoform expression
+
+```{r, EDA}
+dlookr::diagnose(BRCA_phen2)
+ExpNumViz(BRCA_phen2)
+ExpCatViz(BRCA_phen2)
+#Nice to have histograms and sample sizes for the categorical
+
+
+cancer_pct_cor <- correlate(Cancer_pct) %>% shave (upper=T) %>% stretch() %>% drop_na()
+cancer_pct_cor2 <- correlate(Cancer_pct) %>% stretch()
+correlate(Cancer_pct) %>% rearrange() %>% network_plot()
+dplyr:: filter(cancer_pct_cor, r< -0.8 | r>0.8)
+library(ggplot2)
+library(wesanderson)
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+ggplot(data = cancer_pct_cor2, aes(x=x, y=y,
+                                   fill=r)) +
+  scale_fill_gradientn(colours = pal) +
+geom_tile()
+
+as.data.frame(Cancer_pct) %>% ExpNumViz(Page = c(5,5))
+dplyr:: filter(cancer_pct_cor, r< -0.8 | r>0.8) %>% print(n=Inf)
+dplyr:: filter(cancer_pct_cor, r< -0.5 | r>0.5)[["r"]] %>% sign() %>% table()
+variances<-apply(Cancer_pct, 2, var)
+variances[which(variances<=1)]
+```
+
+## Comparing survival data missingess
+
+```{r, survival data missingness}
+nrow(missing)
+hist(surv_data$OS.time)
+hist(missing$OS.time)
+tabyl(surv_data$OS)
+tabyl(missing$OS)
+```
+
+
