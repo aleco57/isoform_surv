@@ -1,0 +1,214 @@
+---
+title: "regression_res"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(survival)
+library(survminer)
+library(lmtest)
+library(xgboost)
+library(dplyr)
+library(caret)
+library(SHAPforxgboost)
+library(SmartEDA)
+library(dendextend)
+library(RColorBrewer)
+library(gplots)
+
+load("clean_data_all.RData")
+load("tune_hyper.RData")
+
+#Remove gender as small sample in breast cancer
+clean_data_all <- clean_data_all[-2]
+clean_data_all$stage <- as.numeric(clean_data_all$stage)
+clean_data_all <- clean_data_all[!is.na(clean_data_all$OS.time),]
+clean_data_all$days_to_birth <- clean_data_all$days_to_birth*-1 
+
+set.seed(123)
+trainIndex <- createDataPartition(clean_data_all$OS, 
+                                  list=F,
+                                  p=.8)
+train <- clean_data_all[ trainIndex,]
+test  <- clean_data_all[-trainIndex,]
+```
+
+## Plot Normality of both isoform% and gene RSEM norm_count
+
+```{r, fig.dim = c(20, 15)}
+clean_data_all %>%
+     keep(is.numeric) %>%                     
+     gather() %>% filter(str_detect(key, "_CI")) %>%                           
+     ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") + 
+  geom_density()
+
+clean_data_all %>%
+     keep(is.numeric) %>%                     
+     gather() %>% filter(!str_detect(key, "_CI")) %>%                           
+     ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") + 
+  geom_density()
+```
+
+## Remove isoforms showing small dynamic range:
+```{r}
+p <- clean_data_all %>% dplyr::select(ends_with("_CI")) %>% apply(2, var)
+clean_data_all[, p[p<5] %>% names()] %>% Hmisc::describe()
+
+clean_data_all <- subset(clean_data_all, select = -c(NAE1_CI, NAE1))
+```
+
+
+## Plot dendrogram and heat map
+```{r, fig.dim = c(20, 15)}
+cor <- clean_data_all %>% dplyr::select(ends_with("_CI")) %>% cor(use="pairwise.complete.obs")
+dist <- as.dist(1 - cor)
+dend <- hclust(dist, method="complete") %>% as.dendrogram
+plot(dend)
+
+highlight <- c("CCDC152_CI", "HOXC6_CI")
+
+colorLeafs <- function(x) {
+  if (is.leaf(x) && attr(x, "label") %in% highlight) {
+    attr(x, "nodePar") <- list(lab.col="red", pch=NA)
+  }
+  return(x)
+}
+
+cor <- clean_data_all %>% dplyr::select(ends_with("_CI")) %>% cor(use="pairwise.complete.obs")
+dist <- as.dist(1 - cor)
+
+hc <- hclust(dist)
+
+dd <- dendrapply(as.dendrogram(hc), colorLeafs)
+
+
+color.scheme <- rev(brewer.pal(10,"RdBu"))
+heatmap.2(cor, 
+          Rowv = ladderize(dend), 
+          Colv = ladderize(dend), 
+          dendrogram = "both", 
+          revC = TRUE,  # rev column order of dendrogram so conforms to natural representation
+          trace = "none", 
+          density.info = "none",
+          col = color.scheme, key = FALSE,
+          labRow = FALSE, labCol = FALSE)
+
+```
+
+## Generate Linear Models and compare fits
+### TO DO! Add in concorance for the test datasets
+
+```{r}
+cox_pheno <- coxph(Surv(OS.time, OS) ~ ., data = train[1:5])
+cox_iso <- coxph(Surv(OS.time, OS) ~ ., data = train[4:90]) 
+cox_gene <- coxph(Surv(OS.time, OS) ~ ., data = train[-c(1:3,6:90)])
+cox_all <- coxph(Surv(OS.time, OS) ~ ., data = train) 
+
+#cox_pheno_test <- 
+#cox_iso_test <- 
+#cox_gene_test <- 
+#cox_all_test <-  
+
+#Does adding isoform expression improve our model?
+model_name <- c("Cox_pheno", "Cox_pheno_test", "Cox_gene", "Cox_gene_test", "Cox_iso", "Cox_iso_test", "Cox_all", "Cox_all_test")
+concordance_df <- data.frame (model  = model_name,
+                  conc_metric = c(concordance(cox_pheno)[["concordance"]],
+                                  concordance(cox_gene)[["concordance"]],
+                                  concordance(cox_iso)[["concordance"]],
+                                  concordance(cox_all)[["concordance"]]))
+concordance_df
+
+#LHR test between just genes and gene + iso
+lrtest(cox_all, cox_gene) %>% as.data.frame()
+
+
+#cox.zph(cox_all)
+```
+
+## Xgboost model
+```{r}
+label.train <- ifelse(train$OS == 1, train$OS.time, -train$OS.time)
+label.test <- ifelse(test$OS == 1, test$OS.time, -test$OS.time)
+Dmat.train <- train %>% dplyr::select(ends_with("_CI"), stage, age_at_initial_pathologic_diagnosis, days_to_birth) %>%
+  as.matrix() %>% xgb.DMatrix(label = label.train)
+Dmat.test <- test %>% dplyr::select(ends_with("_CI"), stage, age_at_initial_pathologic_diagnosis, days_to_birth) %>%
+  as.matrix() %>% xgb.DMatrix(label = label.test)
+Dmat.train_gene <- train %>% dplyr::select(-OS, -OS.time) %>% as.matrix() %>% xgb.DMatrix(label = label.train)
+Dmat.test_gene <- test %>% dplyr::select(-OS, -OS.time) %>% as.matrix() %>% xgb.DMatrix(label = label.test)
+
+#Tuning is on seperate r document
+
+xgb1 <- xgboost(data = Dmat.train,
+                params = tune_param_iso[6:12] %>% as.list(), 
+                nrounds = tune_param_iso[[1]], 
+                maximize = F, 
+                eval_metric = "cox-nloglik")
+
+xgb2 <- xgboost(data = Dmat.train_gene,
+                params = tune_param_gene[6:12] %>% as.list(), 
+                nrounds = tune_param_gene[[1]], 
+                early_stopping_rounds = 20, #If doesn't improve for 20 round then the code will stop running
+                maximize = F, 
+                eval_metric = "cox-nloglik")
+```
+
+## SHAP plots for xgboost model
+
+
+```{r}
+shap_values <- shap.values(xgb_model = xgb1, X_train = Dmat.train)
+shap_values2 <- shap.values(xgb_model = xgb2, X_train = Dmat.train_gene)
+shap_values$mean_shap_score
+shap_values2$mean_shap_score
+
+
+
+
+shap_long <- shap.prep(xgb_model = xgb1, X_train = train %>% dplyr::select(ends_with("_CI"), stage, age_at_initial_pathologic_diagnosis, days_to_birth) %>%
+  as.matrix())
+shap.plot.summary.wrap1(xgb1, train %>% dplyr::select(ends_with("_CI"), stage, age_at_initial_pathologic_diagnosis, days_to_birth) %>%
+  as.matrix(), top_n=10)
+
+
+shap_long2 <- shap.prep(xgb_model = xgb2, X_train = train %>% dplyr::select(-OS, -OS.time) %>% as.matrix())
+shap.plot.summary.wrap1(xgb2, train %>% dplyr::select(-OS, -OS.time) %>% as.matrix(), top_n = 15)
+
+p1 <- shap.plot.dependence(data_long = shap_long, "CCDC152_CI")
+p2 <- shap.plot.dependence(data_long = shap_long2, "CCDC152_CI")
+p1 <- shap.plot.dependence(data_long = shap_long, "HOXC6_CI")
+p2 <- shap.plot.dependence(data_long = shap_long2, "HOXC6_CI")
+p1 <- shap.plot.dependence(data_long = shap_long, "EGFLAM_CI")
+p2 <- shap.plot.dependence(data_long = shap_long2, "EGFLAM_CI")
+```
+
+## SHAP Interactions:
+
+```{r}
+shap_int <- shap.prep.interaction(xgb_mod = xgb1, X_train = train %>% dplyr::select(ends_with("_CI"), stage, age_at_initial_pathologic_diagnosis, days_to_birth) %>%
+  as.matrix())
+
+shap.plot.dependence(data_long = shap_long,
+                           data_int = shap_int,
+                           x= "CCDC152_CI")
+```
+
+```{r, clean linear}
+selected_data <- clean_data_all %>% dplyr::select(OS, OS.time, CCDC152_CI, SAAL1_CI, HOXC6_CI)
+
+
+
+selected_data$CCDC152_CI_cat <- cut(clean_data_all$CCDC152_CI,
+                                    breaks=c(-1,60,101),
+                                    labels = c(0,1))
+surv1 <- survfit(Surv(OS.time, OS)~CCDC152_CI_cat, data=selected_data)
+ggsurvplot(surv1, conf.int=TRUE, pval=TRUE, risk.table=TRUE, legend.labs=c(" Less than 60%", " More than 60%"), title = "Km plot of cancerous isoform CCDC152 at levels less than and greater than 60% of overall parent gene expression")
+
+
+selected_data$HOXC6_CI_cat <- ifelse(selected_data$HOXC6_CI > 7.5,1,0 )
+ggsurvplot(survfit(Surv(OS.time, OS)~HOXC6_CI_cat, data=selected_data), 
+           conf.int=TRUE, pval=TRUE, risk.table=TRUE, legend.labs=c(" Less than 7.5%", " More than 7.5%"), title = "Km plot of cancerous isoform HOXC6 at levels less than and greater than 7.5% of overall parent gene expression")
+
+```
